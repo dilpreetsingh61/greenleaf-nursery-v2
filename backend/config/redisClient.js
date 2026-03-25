@@ -1,5 +1,6 @@
 const { createClient } = require("redis");
-require("dotenv").config();
+const path = require("path");
+require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 
 const shouldDisableRedis =
   process.env.NODE_ENV === "test" || process.env.REDIS_DISABLED === "true";
@@ -19,18 +20,44 @@ const disabledClient = {
   quit: async () => {},
 };
 
-if (shouldDisableRedis) {
-  module.exports = disabledClient;
-} else {
-  const client = createClient({
+function buildRedisOptions() {
+  const redisUrl = process.env.REDIS_URL;
+  const redisTlsEnabled =
+    process.env.REDIS_TLS === "true" ||
+    (typeof redisUrl === "string" && redisUrl.startsWith("rediss://"));
+
+  const baseSocket = {
+    connectTimeout: parseInt(process.env.REDIS_CONNECT_TIMEOUT || "10000", 10),
+    keepAlive: parseInt(process.env.REDIS_KEEP_ALIVE || "5000", 10),
+    reconnectStrategy: () => false,
+  };
+
+  if (redisUrl) {
+    return {
+      url: redisUrl,
+      socket: {
+        ...baseSocket,
+        tls: redisTlsEnabled,
+      },
+    };
+  }
+
+  return {
     username: process.env.REDIS_USERNAME || "default",
     password: process.env.REDIS_PASSWORD || "",
     socket: {
+      ...baseSocket,
       host: process.env.REDIS_HOST || "localhost",
       port: parseInt(process.env.REDIS_PORT || "6379", 10),
-      reconnectStrategy: () => false,
+      tls: redisTlsEnabled,
     },
-  });
+  };
+}
+
+if (shouldDisableRedis) {
+  module.exports = disabledClient;
+} else {
+  const client = createClient(buildRedisOptions());
 
   let redisReady = false;
   let hasLoggedFailure = false;

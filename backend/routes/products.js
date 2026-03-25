@@ -1,7 +1,7 @@
 /**
  * PRODUCT ROUTES - RESTful API endpoints for plant nursery products
- * 
- * CE-2 Upgraded Version: Uses PostgreSQL + Redis Cloud Caching
+ *
+ * Uses Sequelize + optional Redis caching.
  */
 
 const express = require("express");
@@ -9,9 +9,10 @@ const { Op } = require("sequelize");
 const { body, query, param, validationResult } = require("express-validator");
 const { asyncHandler, createError } = require("../middleware/errorHandler");
 const { Product } = require("../models");
-const redisClient = require("../config/redisClient"); // ✅ Redis Cloud client
+const redisClient = require("../config/redisClient");
 
 const router = express.Router();
+const shouldLogCacheEvents = process.env.DEBUG_CACHE === "true";
 
 async function getCachedJson(key) {
   if (!redisClient?.isOpen) return null;
@@ -120,10 +121,6 @@ function buildProductOrder(sort) {
   }
 }
 
-/* -------------------------------------------------------------------------- */
-/*                            GET /api/products (Cached)                      */
-/* -------------------------------------------------------------------------- */
-
 router.get(
   "/",
   [
@@ -145,14 +142,18 @@ router.get(
     }
 
     const cacheKey = `products:${JSON.stringify(req.query)}`;
-
-    // ✅ Try Redis cache first
     const cachedData = await getCachedJson(cacheKey);
+
     if (cachedData) {
-      console.log("⚡ Cache hit:", cacheKey);
+      if (shouldLogCacheEvents) {
+        console.log("Cache hit:", cacheKey);
+      }
       return res.json(cachedData);
     }
-    console.log("🧭 Cache miss:", cacheKey);
+
+    if (shouldLogCacheEvents) {
+      console.log("Cache miss:", cacheKey);
+    }
 
     const {
       category,
@@ -210,16 +211,11 @@ router.get(
       message: `Found ${products.length} products (page ${page}/${totalPages})`,
     };
 
-    // ✅ Store in Redis for 2 minutes
     await setCachedJson(cacheKey, 120, responseData);
 
     res.json(responseData);
   })
 );
-
-/* -------------------------------------------------------------------------- */
-/*                             GET /api/products/:id                          */
-/* -------------------------------------------------------------------------- */
 
 router.get(
   "/:id",
@@ -231,12 +227,13 @@ router.get(
     }
 
     const { id } = req.params;
-
-    // ✅ Try Redis first
     const cacheKey = `product:${id}`;
     const cachedProduct = await getCachedJson(cacheKey);
+
     if (cachedProduct) {
-      console.log("⚡ Cache hit:", cacheKey);
+      if (shouldLogCacheEvents) {
+        console.log("Cache hit:", cacheKey);
+      }
       return res.json(cachedProduct);
     }
 
@@ -244,17 +241,11 @@ router.get(
     if (!product) throw createError(`Product with ID ${id} not found`, 404);
 
     const response = { success: true, data: normalizeProduct(product), message: "Product retrieved successfully" };
-
-    // ✅ Store single product cache for 5 minutes
     await setCachedJson(cacheKey, 300, response);
 
     res.json(response);
   })
 );
-
-/* -------------------------------------------------------------------------- */
-/*                           POST /api/products (Admin)                       */
-/* -------------------------------------------------------------------------- */
 
 router.post(
   "/",
@@ -290,16 +281,11 @@ router.post(
       size: adultSize || null,
     });
 
-    // ✅ Clear cache after product creation
     await clearProductCache();
 
     res.status(201).json({ success: true, data: normalizeProduct(createdProduct), message: "Product created successfully" });
   })
 );
-
-/* -------------------------------------------------------------------------- */
-/*                           PUT /api/products/:id                            */
-/* -------------------------------------------------------------------------- */
 
 router.put(
   "/:id",
@@ -336,17 +322,12 @@ router.put(
 
     await product.update(updatePayload);
 
-    // ✅ Invalidate product cache
     await deleteCacheKey(`product:${id}`);
-    await clearProductCache(); // clear product list cache
+    await clearProductCache();
 
     res.json({ success: true, data: normalizeProduct(product), message: "Product updated successfully" });
   })
 );
-
-/* -------------------------------------------------------------------------- */
-/*                         DELETE /api/products/:id                           */
-/* -------------------------------------------------------------------------- */
 
 router.delete(
   "/:id",
@@ -358,7 +339,6 @@ router.delete(
 
     await product.destroy();
 
-    // ✅ Clear cache after delete
     await deleteCacheKey(`product:${id}`);
     await clearProductCache();
 

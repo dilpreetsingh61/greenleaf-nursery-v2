@@ -1,37 +1,45 @@
 # Node dependencies
 node_modules/
-.env
-.DS_Store
+backend/node_modules/
+frontend/node_modules/
 
-<<<<<<< HEAD
-=======
-# SSL certificates (never commit private keys)
+# Environment files
+.env
+.env.*
+backend/.env
+frontend/.env
+
+# SSL certificates and private keys
 backend/ssl/
 *.key
 *.pem
 *.crt
 
-# Runtime data (keep folder structure, ignore actual data files)
+# Runtime data
 backend/data/*.json
 !backend/data/.gitkeep
 
-# Documentation and deployment guides
-*.md
-
-# AWS/Heroku deployment files
-.ebignore
-.ebextensions/
-Procfile
-
->>>>>>> 1771e2a15745e7541c070fed76cdca1c70a453a7
-# Logs
+# Local logs
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+frontend/build.log
+frontend/build_output.txt
 
 # Build outputs
 dist/
 build/
+frontend/dist/
+frontend/build/
+backend/dist/
+backend/build/
+
+# Deployment/local platform files
+.ebignore
+.ebextensions/
+Procfile
 
 # OS / Misc
+.DS_Store
 Thumbs.db

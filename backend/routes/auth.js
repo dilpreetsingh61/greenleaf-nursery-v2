@@ -2,7 +2,7 @@ const express = require('express');
 const bcrypt = require('bcrypt');
 const { body, validationResult } = require('express-validator');
 const { asyncHandler, createError } = require('../middleware/errorHandler');
-const User = require('../schemas/User'); // MongoDB User model
+const { User } = require('../models');
 const { generateToken } = require('../middleware/jwt'); // JWT token generation
 const { 
     checkLoginAttempts, 
@@ -27,13 +27,12 @@ router.post('/register',
 
         const { name, email, password } = req.body;
 
-        // Check if email already exists in MongoDB Atlas
-        const existingUser = await User.findOne({ email });
+        const existingUser = await User.findOne({ where: { email } });
         if (existingUser) {
             return res.status(409).json({ success: false, message: 'Email already registered' });
         }
 
-        // Hash password and create user in MongoDB Atlas
+        // Store the authenticated user in MySQL
         const passwordHash = await bcrypt.hash(password, 10);
         const user = await User.create({
             name,
@@ -41,16 +40,16 @@ router.post('/register',
             passwordHash
         });
 
-        req.session.user = { id: user._id.toString(), name: user.name, email: user.email };
+        req.session.user = { id: user.id.toString(), name: user.name, email: user.email };
 
         // Generate JWT token
-        const token = generateToken({ id: user._id, name: user.name, email: user.email });
+        const token = generateToken({ id: user.id, name: user.name, email: user.email });
 
         res.status(201).json({ 
             success: true, 
             message: 'Account created', 
             data: { 
-                id: user._id, 
+                id: user.id,
                 name: user.name, 
                 email: user.email 
             },
@@ -74,8 +73,7 @@ router.post('/login',
 
         const { email, password } = req.body;
         
-        // Find user in MongoDB Atlas
-        const user = await User.findOne({ email });
+        const user = await User.findOne({ where: { email } });
         
         // User not found - record failed attempt
         if (!user) {
@@ -111,7 +109,7 @@ router.post('/login',
         // Successful login - clear any failed attempts
         await clearFailedAttempts(req);
 
-        req.session.user = { id: user._id.toString(), name: user.name, email: user.email };
+        req.session.user = { id: user.id.toString(), name: user.name, email: user.email };
         
         // Force session save before sending response
         req.session.save((err) => {
@@ -126,13 +124,13 @@ router.post('/login',
             console.log('✅ User logged in and session saved:', user.email);
             
             // Generate JWT token
-            const token = generateToken({ id: user._id, name: user.name, email: user.email });
+            const token = generateToken({ id: user.id, name: user.name, email: user.email });
             
             res.json({ 
                 success: true, 
                 message: 'Logged in successfully', 
                 data: { 
-                    id: user._id, 
+                    id: user.id, 
                     name: user.name, 
                     email: user.email 
                 },

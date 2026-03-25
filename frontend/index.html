@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/x-icon" href="/images/favicon.ico" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GreenLeaf Nursery - React</title>
+    
+    <!-- CSS Files -->
+    <link rel="stylesheet" href="/css/style.css">
+    <link rel="stylesheet" href="/css/responsive.css">
+    
+    <!-- Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  </head>
+  <body>
+    <div id="root"></div>
+    
+    <!-- Socket.io -->
+    <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+    
+    <!-- Global Config -->
+    <script>
+        window.appConfig = {
+            apiBaseUrl: '/api',
+            enableNotifications: true,
+            autoSaveCart: true,
+            productsLoaded: true,
+            isAuthenticated: false
+        };
+        window.apiBaseUrl = '/api';
+        window.allProductsData = [];
+    </script>
+    
+    <!-- Core JS -->
+    <script src="/js/browser-cache.js"></script>
+    <script src="/js/main.js"></script>
+    <script src="/js/cart.js"></script>
+    <script src="/js/products.js"></script>
+    <script src="/js/filters.js"></script>
+    <script src="/js/newsletter.js"></script>
+    <script src="/js/jwt-integration.js"></script>
+    <script src="/js/websocket-integration.js"></script>
+    
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

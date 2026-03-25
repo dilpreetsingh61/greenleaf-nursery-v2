@@ -5,6 +5,7 @@
 process.env.NODE_ENV = 'test';
 process.env.PORT = 4000;
 process.env.USE_HTTPS = 'false';
+process.env.REDIS_DISABLED = 'true';
 
 // Increase timeout for async operations
 jest.setTimeout(10000);

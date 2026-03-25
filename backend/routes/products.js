@@ -5,12 +5,120 @@
  */
 
 const express = require("express");
+const { Op } = require("sequelize");
 const { body, query, param, validationResult } = require("express-validator");
 const { asyncHandler, createError } = require("../middleware/errorHandler");
-const pool = require("../db/pool");
+const { Product } = require("../models");
 const redisClient = require("../config/redisClient"); // ✅ Redis Cloud client
 
 const router = express.Router();
+
+async function getCachedJson(key) {
+  if (!redisClient?.isOpen) return null;
+
+  try {
+    const cachedData = await redisClient.get(key);
+    return cachedData ? JSON.parse(cachedData) : null;
+  } catch (error) {
+    console.warn(`Redis GET failed for ${key}:`, error.message);
+    return null;
+  }
+}
+
+async function setCachedJson(key, ttlSeconds, value) {
+  if (!redisClient?.isOpen) return;
+
+  try {
+    await redisClient.setEx(key, ttlSeconds, JSON.stringify(value));
+  } catch (error) {
+    console.warn(`Redis SET failed for ${key}:`, error.message);
+  }
+}
+
+async function deleteCacheKey(key) {
+  if (!redisClient?.isOpen) return;
+
+  try {
+    await redisClient.del(key);
+  } catch (error) {
+    console.warn(`Redis DEL failed for ${key}:`, error.message);
+  }
+}
+
+async function clearProductCache() {
+  if (!redisClient?.isOpen) return;
+
+  try {
+    await redisClient.flushAll();
+  } catch (error) {
+    console.warn("Redis FLUSHALL failed:", error.message);
+  }
+}
+
+function normalizeProduct(product) {
+  const plainProduct = typeof product.get === "function" ? product.get({ plain: true }) : product;
+  const { instock, ...rest } = plainProduct;
+
+  return {
+    ...rest,
+    price: parseFloat(rest.price) || 0,
+    rating:
+      rest.rating !== null && rest.rating !== undefined
+        ? parseFloat(rest.rating)
+        : rest.rating,
+    originalPrice:
+      rest.originalPrice !== null && rest.originalPrice !== undefined
+        ? parseFloat(rest.originalPrice)
+        : null,
+    inStock: instock !== undefined ? instock : true,
+  };
+}
+
+function buildProductWhereClause(filters) {
+  const where = {};
+
+  if (filters.category && filters.category !== "all") {
+    where.category = { [Op.like]: filters.category };
+  }
+  if (filters.size && filters.size !== "all") {
+    where.size = { [Op.like]: filters.size };
+  }
+  if (filters.minPrice || filters.maxPrice) {
+    where.price = {};
+    if (filters.minPrice) where.price[Op.gte] = parseFloat(filters.minPrice);
+    if (filters.maxPrice) where.price[Op.lte] = parseFloat(filters.maxPrice);
+  }
+  if (filters.inStock === "true") {
+    where.instock = true;
+  }
+  if (filters.search) {
+    where[Op.or] = [
+      { name: { [Op.like]: `%${filters.search}%` } },
+      { description: { [Op.like]: `%${filters.search}%` } },
+    ];
+  }
+
+  return where;
+}
+
+function buildProductOrder(sort) {
+  switch ((sort || "").toLowerCase()) {
+    case "price-low":
+      return [["price", "ASC"]];
+    case "price-high":
+      return [["price", "DESC"]];
+    case "rating":
+      return [["rating", "DESC"]];
+    case "name":
+      return [["name", "ASC"]];
+    case "newest":
+      return [["id", "DESC"]];
+    case "featured":
+      return [["badge", "DESC"], ["rating", "DESC"], ["id", "DESC"]];
+    default:
+      return [["id", "ASC"]];
+  }
+}
 
 /* -------------------------------------------------------------------------- */
 /*                            GET /api/products (Cached)                      */
@@ -19,14 +127,14 @@ const router = express.Router();
 router.get(
   "/",
   [
-    query("category").optional().isIn(["indoor", "outdoor", "flowering", "succulent", "all"]),
+    query("category").optional().isIn(["indoor", "outdoor", "flowering", "succulent", "pots", "tools", "all"]),
     query("care").optional().isIn(["easy", "moderate", "expert", "all"]),
     query("size").optional().isIn(["small", "medium", "large", "all"]),
     query("minPrice").optional().isFloat({ min: 0 }),
     query("maxPrice").optional().isFloat({ min: 0 }),
     query("inStock").optional().isBoolean(),
     query("search").optional().isLength({ min: 1, max: 100 }),
-    query("sort").optional().isIn(["price-low", "price-high", "rating", "name", "newest", "popular"]),
+    query("sort").optional().isIn(["price-low", "price-high", "rating", "name", "newest", "popular", "featured"]),
     query("page").optional().isInt({ min: 1 }),
     query("limit").optional().isInt({ min: 1, max: 100 }),
   ],
@@ -39,10 +147,10 @@ router.get(
     const cacheKey = `products:${JSON.stringify(req.query)}`;
 
     // ✅ Try Redis cache first
-    const cachedData = await redisClient.get(cacheKey);
+    const cachedData = await getCachedJson(cacheKey);
     if (cachedData) {
       console.log("⚡ Cache hit:", cacheKey);
-      return res.json(JSON.parse(cachedData));
+      return res.json(cachedData);
     }
     console.log("🧭 Cache miss:", cacheKey);
 
@@ -59,82 +167,34 @@ router.get(
       limit = 12,
     } = req.query;
 
-    // ---------------------- Build SQL Query Dynamically ----------------------
-    let queryStr = "SELECT * FROM products WHERE 1=1";
-    const values = [];
-    let i = 1;
+    const pageNumber = parseInt(page, 10);
+    const limitNumber = parseInt(limit, 10);
+    const offset = (pageNumber - 1) * limitNumber;
+    const where = buildProductWhereClause({ category, care, size, minPrice, maxPrice, inStock, search });
+    const order = buildProductOrder(sort);
 
-    if (category && category !== "all") {
-      queryStr += ` AND LOWER(category)=LOWER($${i++})`;
-      values.push(category);
-    }
-    if (care && care !== "all") {
-      queryStr += ` AND LOWER(care)=LOWER($${i++})`;
-      values.push(care);
-    }
-    if (size && size !== "all") {
-      queryStr += ` AND LOWER(size)=LOWER($${i++})`;
-      values.push(size);
-    }
-    if (minPrice) {
-      queryStr += ` AND price >= $${i++}`;
-      values.push(parseFloat(minPrice));
-    }
-    if (maxPrice) {
-      queryStr += ` AND price <= $${i++}`;
-      values.push(parseFloat(maxPrice));
-    }
-    if (inStock === "true") queryStr += " AND instock = true";
-    if (search) {
-      queryStr += ` AND (LOWER(name) LIKE LOWER($${i}) OR LOWER(description) LIKE LOWER($${i}))`;
-      values.push(`%${search}%`);
-      i++;
-    }
+    const { rows, count } = await Product.findAndCountAll({
+      where,
+      order,
+      limit: limitNumber,
+      offset,
+    });
 
-    // ----------------------------- Sorting -----------------------------------
-    if (sort) {
-      switch (sort.toLowerCase()) {
-        case "price-low": queryStr += " ORDER BY price ASC"; break;
-        case "price-high": queryStr += " ORDER BY price DESC"; break;
-        case "rating": queryStr += " ORDER BY rating DESC"; break;
-        case "name": queryStr += " ORDER BY name ASC"; break;
-        case "newest": queryStr += " ORDER BY id DESC"; break;
-        default: queryStr += " ORDER BY id ASC";
-      }
-    } else queryStr += " ORDER BY id ASC";
-
-    // ---------------------------- Pagination ---------------------------------
-    const offset = (page - 1) * limit;
-    queryStr += ` LIMIT ${limit} OFFSET ${offset}`;
-
-    // ----------------------------- Execute -----------------------------------
-    const result = await pool.query(queryStr, values);
-    
-    // Convert snake_case to camelCase for frontend compatibility
-    const products = result.rows.map(row => ({
-      ...row,
-      inStock: row.instock !== undefined ? row.instock : true,
-      originalPrice: row.original_price ? parseFloat(row.original_price) : null,
-      price: parseFloat(row.price) || 0,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at
-    }));
-
-    const countResult = await pool.query("SELECT COUNT(*) FROM products");
-    const totalProducts = parseInt(countResult.rows[0].count);
-    const totalPages = Math.ceil(totalProducts / limit);
+    const products = rows.map(normalizeProduct);
+    const totalProducts = count;
+    const totalPages = Math.max(1, Math.ceil(totalProducts / limitNumber));
 
     const responseData = {
       success: true,
       data: {
         products,
         pagination: {
-          currentPage: parseInt(page),
+          currentPage: pageNumber,
           totalPages,
           totalProducts,
-          productsPerPage: parseInt(limit),
-          hasNextPage: page < totalPages,
-          hasPrevPage: page > 1,
+          productsPerPage: limitNumber,
+          hasNextPage: pageNumber < totalPages,
+          hasPrevPage: pageNumber > 1,
         },
         filters: {
           category: category || "all",
@@ -151,7 +211,7 @@ router.get(
     };
 
     // ✅ Store in Redis for 2 minutes
-    await redisClient.setEx(cacheKey, 120, JSON.stringify(responseData));
+    await setCachedJson(cacheKey, 120, responseData);
 
     res.json(responseData);
   })
@@ -174,19 +234,19 @@ router.get(
 
     // ✅ Try Redis first
     const cacheKey = `product:${id}`;
-    const cachedProduct = await redisClient.get(cacheKey);
+    const cachedProduct = await getCachedJson(cacheKey);
     if (cachedProduct) {
       console.log("⚡ Cache hit:", cacheKey);
-      return res.json(JSON.parse(cachedProduct));
+      return res.json(cachedProduct);
     }
 
-    const result = await pool.query("SELECT * FROM products WHERE id=$1", [id]);
-    if (result.rows.length === 0) throw createError(404, `Product with ID ${id} not found`);
+    const product = await Product.findByPk(id);
+    if (!product) throw createError(`Product with ID ${id} not found`, 404);
 
-    const response = { success: true, data: result.rows[0], message: "Product retrieved successfully" };
+    const response = { success: true, data: normalizeProduct(product), message: "Product retrieved successfully" };
 
     // ✅ Store single product cache for 5 minutes
-    await redisClient.setEx(cacheKey, 300, JSON.stringify(response));
+    await setCachedJson(cacheKey, 300, response);
 
     res.json(response);
   })
@@ -200,7 +260,7 @@ router.post(
   "/",
   [
     body("name").notEmpty(),
-    body("category").isIn(["indoor", "outdoor", "flowering", "succulent"]),
+    body("category").isIn(["indoor", "outdoor", "flowering", "succulent", "pots", "tools"]),
     body("price").isFloat({ min: 0 }),
     body("description").notEmpty(),
     body("size").isIn(["small", "medium", "large"]),
@@ -219,20 +279,21 @@ router.post(
       toxicity, origin, adultSize
     } = req.body;
 
-    const result = await pool.query(
-      `INSERT INTO products
-      (name, category, price, badge, description, instock, image,
-       lightRequirement, wateringFrequency, humidity, toxicity, origin, adultSize)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-       RETURNING *`,
-      [name, category, price, badge || null, description, inStock, image || null,
-       lightRequirement, wateringFrequency, humidity, toxicity, origin, adultSize]
-    );
+    const createdProduct = await Product.create({
+      name,
+      category,
+      price,
+      badge: badge || null,
+      description,
+      instock: inStock,
+      image: image || null,
+      size: adultSize || null,
+    });
 
     // ✅ Clear cache after product creation
-    await redisClient.flushAll();
+    await clearProductCache();
 
-    res.status(201).json({ success: true, data: result.rows[0], message: "Product created successfully" });
+    res.status(201).json({ success: true, data: normalizeProduct(createdProduct), message: "Product created successfully" });
   })
 );
 
@@ -245,30 +306,41 @@ router.put(
   [param("id").isInt({ min: 1 })],
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const fields = [];
-    const values = [];
-    let idx = 1;
+    const updatePayload = {};
+    const allowedFields = {
+      name: "name",
+      category: "category",
+      price: "price",
+      badge: "badge",
+      description: "description",
+      inStock: "instock",
+      image: "image",
+      size: "size",
+      rating: "rating",
+      originalPrice: "originalPrice",
+    };
 
     for (const [key, value] of Object.entries(req.body)) {
-      fields.push(`${key}=$${idx++}`);
-      values.push(value);
+      const targetKey = allowedFields[key];
+      if (targetKey) {
+        updatePayload[targetKey] = value;
+      }
     }
 
-    if (fields.length === 0) {
+    if (Object.keys(updatePayload).length === 0) {
       return res.status(400).json({ success: false, message: "No fields to update" });
     }
 
-    values.push(id);
-    const query = `UPDATE products SET ${fields.join(", ")} WHERE id=$${idx} RETURNING *`;
-    const result = await pool.query(query, values);
+    const product = await Product.findByPk(id);
+    if (!product) throw createError(`Product with ID ${id} not found`, 404);
 
-    if (result.rows.length === 0) throw createError(404, `Product with ID ${id} not found`);
+    await product.update(updatePayload);
 
     // ✅ Invalidate product cache
-    await redisClient.del(`product:${id}`);
-    await redisClient.flushAll(); // clear product list cache
+    await deleteCacheKey(`product:${id}`);
+    await clearProductCache(); // clear product list cache
 
-    res.json({ success: true, data: result.rows[0], message: "Product updated successfully" });
+    res.json({ success: true, data: normalizeProduct(product), message: "Product updated successfully" });
   })
 );
 
@@ -281,14 +353,16 @@ router.delete(
   [param("id").isInt({ min: 1 })],
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const result = await pool.query("DELETE FROM products WHERE id=$1 RETURNING *", [id]);
-    if (result.rows.length === 0) throw createError(404, `Product with ID ${id} not found`);
+    const product = await Product.findByPk(id);
+    if (!product) throw createError(`Product with ID ${id} not found`, 404);
+
+    await product.destroy();
 
     // ✅ Clear cache after delete
-    await redisClient.del(`product:${id}`);
-    await redisClient.flushAll();
+    await deleteCacheKey(`product:${id}`);
+    await clearProductCache();
 
-    res.json({ success: true, message: `Product ${result.rows[0].name} deleted successfully` });
+    res.json({ success: true, message: `Product ${product.name} deleted successfully` });
   })
 );
 

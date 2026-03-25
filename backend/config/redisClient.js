@@ -1,23 +1,95 @@
-// backend/config/redisClient.js
-const { createClient } = require('redis');
-require('dotenv').config();
+const { createClient } = require("redis");
+require("dotenv").config();
 
-const client = createClient({
-  username: process.env.REDIS_USERNAME || 'default',
-  password: process.env.REDIS_PASSWORD || 'xPfmEUQ6xCjOEovD1POvUw2boTFmtJgv',
-  socket: {
-    host: process.env.REDIS_HOST || 'redis-19713.c11.us-east-1-2.ec2.redns.redis-cloud.com',
-    port: process.env.REDIS_PORT || 19713
-  }
-});
+const shouldDisableRedis =
+  process.env.NODE_ENV === "test" || process.env.REDIS_DISABLED === "true";
 
-client.on('connect', () => console.log('✅ Connected to Redis Cloud'));
-client.on('error', (err) => console.error('❌ Redis Client Error:', err.message));
+const disabledClient = {
+  get isOpen() {
+    return false;
+  },
+  get: async () => null,
+  setEx: async () => {},
+  del: async () => {},
+  ttl: async () => -1,
+  dbSize: async () => 0,
+  keys: async () => [],
+  info: async () => "",
+  flushAll: async () => {},
+  quit: async () => {},
+};
 
-// Connect asynchronously 
-client.connect().catch((err) => {
-  console.error('❌ Failed to connect to Redis:', err.message);
-});
-//now export the client
-module.exports = client;
+if (shouldDisableRedis) {
+  module.exports = disabledClient;
+} else {
+  const client = createClient({
+    username: process.env.REDIS_USERNAME || "default",
+    password: process.env.REDIS_PASSWORD || "",
+    socket: {
+      host: process.env.REDIS_HOST || "localhost",
+      port: parseInt(process.env.REDIS_PORT || "6379", 10),
+      reconnectStrategy: () => false,
+    },
+  });
 
+  let redisReady = false;
+  let hasLoggedFailure = false;
+
+  const markUnavailable = (message) => {
+    redisReady = false;
+
+    if (hasLoggedFailure) {
+      return;
+    }
+
+    hasLoggedFailure = true;
+    console.warn(`Redis unavailable, continuing without cache: ${message}`);
+  };
+
+  client.on("ready", () => {
+    redisReady = true;
+    hasLoggedFailure = false;
+    console.log("Connected to Redis");
+  });
+
+  client.on("end", () => {
+    redisReady = false;
+  });
+
+  client.on("error", (err) => {
+    markUnavailable(err.message);
+  });
+
+  client.connect().catch((err) => {
+    markUnavailable(err.message);
+  });
+
+  module.exports = {
+    get isOpen() {
+      return redisReady && client.isOpen;
+    },
+    get: async (...args) => (redisReady ? client.get(...args) : null),
+    setEx: async (...args) => {
+      if (!redisReady) return;
+      await client.setEx(...args);
+    },
+    del: async (...args) => {
+      if (!redisReady) return;
+      await client.del(...args);
+    },
+    ttl: async (...args) => (redisReady ? client.ttl(...args) : -1),
+    dbSize: async (...args) => (redisReady ? client.dbSize(...args) : 0),
+    keys: async (...args) => (redisReady ? client.keys(...args) : []),
+    info: async (...args) => (redisReady ? client.info(...args) : ""),
+    flushAll: async (...args) => {
+      if (!redisReady) return;
+      await client.flushAll(...args);
+    },
+    quit: async () => {
+      redisReady = false;
+      if (client.isOpen) {
+        await client.quit();
+      }
+    },
+  };
+}

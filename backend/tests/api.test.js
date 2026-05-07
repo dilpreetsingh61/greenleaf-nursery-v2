@@ -69,10 +69,14 @@ jest.mock("../config/redisClient", () => ({
 }));
 
 const apiRoutes = require("../routes/api");
+const contactRoutes = require("../routes/contacts");
+const newsletterRoutes = require("../routes/newsletter");
 
 const app = express();
 app.use(express.json());
 app.use("/api", apiRoutes);
+app.use("/api/contact", contactRoutes);
+app.use("/api/subscribe", newsletterRoutes);
 
 describe("Integration Tests - API Endpoints", () => {
   beforeEach(() => {
@@ -129,9 +133,9 @@ describe("Integration Tests - API Endpoints", () => {
     });
   });
 
-  describe("POST /api/newsletter/subscribe", () => {
+  describe("POST /api/subscribe", () => {
     test("should reject invalid email", async () => {
-      const response = await request(app).post("/api/newsletter/subscribe").send({ email: "invalid-email" }).expect(400);
+      const response = await request(app).post("/api/subscribe").send({ email: "invalid-email" }).expect(400);
 
       expect(response.body.success).toBe(false);
       expect(response.body).toHaveProperty("errors");
@@ -139,15 +143,14 @@ describe("Integration Tests - API Endpoints", () => {
 
     test("should accept valid email", async () => {
       const response = await request(app)
-        .post("/api/newsletter/subscribe")
+        .post("/api/subscribe")
         .send({
           email: "test@example.com",
-          name: "Test User",
         })
         .expect(201);
 
       expect(response.body.success).toBe(true);
-      expect(response.body.message).toContain("subscribed");
+      expect(response.body.message).toContain("subscribing");
     });
   });
 
@@ -168,7 +171,8 @@ describe("Integration Tests - API Endpoints", () => {
       const response = await request(app)
         .post("/api/contact")
         .send({
-          name: "Test User",
+          firstName: "Test",
+          lastName: "User",
           email: "test@example.com",
           subject: "Test Subject Line",
           message: "This is a test message with enough characters to pass validation.",

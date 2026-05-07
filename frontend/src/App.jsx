@@ -21,10 +21,6 @@ function App() {
           <Route index element={<Home />} />
           <Route path="auth-login" element={<AuthLogin />} />
           <Route path="auth-register" element={<AuthRegister />} />
-          <Route path="auth/login" element={<AuthLogin />} />
-          <Route path="auth/register" element={<AuthRegister />} />
-          <Route path="login" element={<AuthLogin />} />
-          <Route path="register" element={<AuthRegister />} />
           <Route path="pots" element={<AuxGrid category="pots" />} />
           <Route path="tools" element={<AuxGrid category="tools" />} />
           <Route path="care" element={<Care />} />

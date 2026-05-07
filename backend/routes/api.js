@@ -6,8 +6,6 @@ const client = require("../config/redisClient");
 const {
   sequelize,
   Product,
-  Contact,
-  NewsletterSubscriber,
   ServiceBooking,
 } = require("../models");
 
@@ -150,108 +148,6 @@ router.get(
         hasMore: results.length === parseInt(limit, 10),
       },
       message: `Found ${results.length} results for "${q}"`,
-    });
-  })
-);
-
-router.post(
-  "/contact",
-  [
-    body().custom((value) => {
-      const hasFullName = typeof value.name === "string" && value.name.trim().length >= 2;
-      const hasSplitName =
-        typeof value.firstName === "string" &&
-        value.firstName.trim().length >= 2 &&
-        typeof value.lastName === "string" &&
-        value.lastName.trim().length >= 2;
-
-      if (!hasFullName && !hasSplitName) {
-        throw new Error("Name is required");
-      }
-
-      return true;
-    }),
-    body("email").isEmail().normalizeEmail(),
-    body("subject").notEmpty().isLength({ min: 5, max: 200 }),
-    body("message").notEmpty().isLength({ min: 10, max: 1000 }),
-    body("phone").optional().isMobilePhone("any", { strictMode: false }),
-  ],
-  asyncHandler(async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid contact form data",
-        errors: errors.array(),
-      });
-    }
-
-    const resolvedName =
-      typeof req.body.name === "string" && req.body.name.trim()
-        ? req.body.name.trim()
-        : `${req.body.firstName || ""} ${req.body.lastName || ""}`.trim();
-
-    const contact = await Contact.create({
-      name: resolvedName,
-      email: req.body.email,
-      subject: req.body.subject,
-      message: req.body.message,
-      phone: req.body.phone || null,
-    });
-
-    res.status(201).json({
-      success: true,
-      data: {
-        id: contact.id,
-        submittedAt: contact.createdAt,
-      },
-      message: "Contact form submitted successfully. We will get back to you soon!",
-    });
-  })
-);
-
-router.post(
-  "/newsletter/subscribe",
-  [
-    body("email").isEmail().normalizeEmail(),
-    body("name").optional().isLength({ min: 2, max: 100 }),
-  ],
-  asyncHandler(async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid subscription data",
-        errors: errors.array(),
-      });
-    }
-
-    const [subscriber, created] = await NewsletterSubscriber.findOrCreate({
-      where: { email: req.body.email },
-      defaults: {
-        email: req.body.email,
-        isActive: true,
-        subscribedAt: new Date(),
-      },
-    });
-
-    if (!created && subscriber.isActive) {
-      return res.status(409).json({
-        success: false,
-        message: "This email is already subscribed to our newsletter",
-      });
-    }
-
-    if (!created) {
-      await subscriber.update({
-        isActive: true,
-        subscribedAt: new Date(),
-      });
-    }
-
-    res.status(201).json({
-      success: true,
-      message: "Successfully subscribed to our newsletter!",
     });
   })
 );

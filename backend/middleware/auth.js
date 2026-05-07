@@ -25,12 +25,12 @@ function requireAuth(req, res, next) {
     return res.status(401).json({
       success: false,
       message: 'Authentication required',
-      redirectTo: '/auth/login'
+      redirectTo: '/auth-login'
     });
   }
   
   // For regular page requests, redirect to login
-  return res.redirect('/auth/login?redirect=' + encodeURIComponent(req.originalUrl));
+  return res.redirect('/auth-login?redirect=' + encodeURIComponent(req.originalUrl));
 }
 
 /**

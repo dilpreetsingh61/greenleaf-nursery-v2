@@ -586,7 +586,7 @@ async function handleCheckout() {
             
             // Redirect to login page with checkout as return URL
             setTimeout(() => {
-                window.location.href = '/auth/login?redirect=' + encodeURIComponent('/checkout');
+                window.location.href = '/auth-login?redirect=' + encodeURIComponent('/checkout');
             }, 500);
             return;
         }

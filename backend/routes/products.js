@@ -14,8 +14,12 @@ const redisClient = require("../config/redisClient");
 const router = express.Router();
 const shouldLogCacheEvents = process.env.DEBUG_CACHE === "true";
 
+function isRedisCacheAvailable() {
+  return redisClient?.isOpen === true;
+}
+
 async function getCachedJson(key) {
-  if (!redisClient?.isOpen) return null;
+  if (!isRedisCacheAvailable()) return null;
 
   try {
     const cachedData = await redisClient.get(key);
@@ -27,17 +31,19 @@ async function getCachedJson(key) {
 }
 
 async function setCachedJson(key, ttlSeconds, value) {
-  if (!redisClient?.isOpen) return;
+  if (!isRedisCacheAvailable()) return false;
 
   try {
     await redisClient.setEx(key, ttlSeconds, JSON.stringify(value));
+    return true;
   } catch (error) {
     console.warn(`Redis SET failed for ${key}:`, error.message);
+    return false;
   }
 }
 
 async function deleteCacheKey(key) {
-  if (!redisClient?.isOpen) return;
+  if (!isRedisCacheAvailable()) return;
 
   try {
     await redisClient.del(key);
@@ -47,7 +53,7 @@ async function deleteCacheKey(key) {
 }
 
 async function clearProductCache() {
-  if (!redisClient?.isOpen) return;
+  if (!isRedisCacheAvailable()) return;
 
   try {
     await redisClient.flushAll();
@@ -142,6 +148,7 @@ router.get(
     }
 
     const cacheKey = `products:${JSON.stringify(req.query)}`;
+    const redisAvailable = isRedisCacheAvailable();
     const cachedData = await getCachedJson(cacheKey);
 
     if (cachedData) {
@@ -152,7 +159,9 @@ router.get(
     }
 
     if (shouldLogCacheEvents) {
-      console.log("Cache miss:", cacheKey);
+      console.log(
+        redisAvailable ? `Cache miss: ${cacheKey}` : `Redis unavailable, skipping cache: ${cacheKey}`
+      );
     }
 
     const {
@@ -211,7 +220,10 @@ router.get(
       message: `Found ${products.length} products (page ${page}/${totalPages})`,
     };
 
-    await setCachedJson(cacheKey, 120, responseData);
+    const cached = await setCachedJson(cacheKey, 120, responseData);
+    if (shouldLogCacheEvents && cached) {
+      console.log("Cache stored:", cacheKey);
+    }
 
     res.json(responseData);
   })
@@ -228,6 +240,7 @@ router.get(
 
     const { id } = req.params;
     const cacheKey = `product:${id}`;
+    const redisAvailable = isRedisCacheAvailable();
     const cachedProduct = await getCachedJson(cacheKey);
 
     if (cachedProduct) {
@@ -237,11 +250,20 @@ router.get(
       return res.json(cachedProduct);
     }
 
+    if (shouldLogCacheEvents) {
+      console.log(
+        redisAvailable ? `Cache miss: ${cacheKey}` : `Redis unavailable, skipping cache: ${cacheKey}`
+      );
+    }
+
     const product = await Product.findByPk(id);
     if (!product) throw createError(`Product with ID ${id} not found`, 404);
 
     const response = { success: true, data: normalizeProduct(product), message: "Product retrieved successfully" };
-    await setCachedJson(cacheKey, 300, response);
+    const cached = await setCachedJson(cacheKey, 300, response);
+    if (shouldLogCacheEvents && cached) {
+      console.log("Cache stored:", cacheKey);
+    }
 
     res.json(response);
   })
